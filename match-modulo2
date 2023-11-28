@@ -87,7 +87,7 @@ class GerenciadorTarefasGUI:
         color_mapping = {'Urgente': 'red', 'Alta': '#FFA500', 'Média': 'blue', 'Baixa': 'green'}
         priority_color = color_mapping.get(prioridade, 'white')
 
-        # Update the text color for the most recently added task button
+        
         last_index = len(self.tarefas) - 1
         self.janela[f"botao_tarefa_{last_index + 1}"].update(self.tarefas[last_index], visible=True, button_color=('white', priority_color))
 
@@ -138,7 +138,6 @@ class GerenciadorTarefasGUI:
             sg.popup("Número de tarefa inválido.")
 
     def atualizar_layout(self):
-        # Update the layout to reflect the current state of tasks
         new_layout = [
             [sg.Text("Adicionar Tarefa:")],
             [sg.Text("Nome:"), sg.InputText(key="tarefa")],
@@ -171,7 +170,7 @@ class GerenciadorTarefasGUI:
         else:
             sg.popup("Número de tarefa inválido.")
 
-    # Add the following method for removing a task from the GUI
+  
     def remover_tarefa_gui(self, numero):
         if 1 <= numero <= len(self.tarefas):
             tarefa_removida = self.tarefas.pop(numero - 1)
