@@ -1,0 +1,217 @@
+import PySimpleGUI as sg
+from datetime import datetime
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+import os
+from google.auth.transport.requests import Request
+
+# Google Sheets credentials
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+SPREADSHEET_ID = '1BY70KGim9aJTDG13VkSR-UcDXZLhxigeGmT2SYX4K9k'
+RANGE_NAME = 'Página1!A1'
+
+
+class GoogleSheetsApp:
+    def __init__(self):
+        self.initialize_google_sheets()
+
+    def initialize_google_sheets(self):
+        creds = None
+
+        if os.path.exists('token.json'):
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+
+        self.service = build('sheets', 'v4', credentials=creds)
+
+    def add_task_to_sheet(self, tarefa, hora, dia, prioridade, data_hora):
+        values = [[tarefa, hora, dia, prioridade, data_hora]]
+        body = {'values': values}
+
+        try:
+            result = self.service.spreadsheets().values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range=RANGE_NAME,
+                body=body,
+                valueInputOption='USER_ENTERED'
+            ).execute()
+            print(f'{result["updates"]["updatedCells"]} cells updated.')
+        except Exception as e:
+            print(f"Error adding task to Google Sheets: {e}")
+
+
+class GerenciadorTarefasGUI:
+    def __init__(self, google_sheets_app):
+        sg.theme('DarkBlue3')
+        self.tarefas = []
+        self.google_sheets_app = google_sheets_app
+
+        priority_options = ['Baixa', 'Média', 'Alta', 'Urgente']
+
+        self.layout = [
+            [sg.Text("Adicionar Tarefa:")],
+            [sg.Text("Nome:"), sg.InputText(key="tarefa")],
+            [sg.Text("Hora:"), sg.InputText(key="hora", size=(10, 1))],
+            [sg.Text("Data:"), sg.Input(key="dia", size=(10, 1)), sg.CalendarButton("Calendário", target="dia", format='%Y-%m-%d')],
+            [sg.Text("Prioridade:"), sg.Combo(priority_options, key="prioridade")],  # Add ComboBox for priority
+            [sg.Button("Adicionar Tarefa", key="adicionar_tarefa")],
+            [sg.Button("Listar Tarefas Concluídas", key="listar_tarefas_concluidas")],
+            [sg.Text("", size=(50, 1), key="output")],
+            *[[sg.Button(f"Tarefa {i+1}", key=f"botao_tarefa_{i+1}", visible=False),
+               sg.Button("X", key=f"remover_tarefa_{i+1}", visible=False, button_color=("white", sg.theme_background_color()))] for i in range(20)]
+        ]
+
+        self.janela = sg.Window("Gerenciador de Tarefas", self.layout, size=(800, 600), resizable=True)
+
+    def adicionar_tarefa(self, tarefa, hora, dia):
+        prioridade = self.janela["prioridade"].get()
+
+        now = datetime.now()
+        data_hora = now.strftime("%d/%m/%Y %H:%M:%S")
+        descricao_tarefa = f"{tarefa} - Hora: {hora} - Dia: {dia} - Prioridade: {prioridade} - Adicionado em: {data_hora}"
+        self.tarefas.append(descricao_tarefa)
+        sg.popup(f'Tarefa "{descricao_tarefa}" adicionada.')
+        self.google_sheets_app.add_task_to_sheet(tarefa, hora, dia, prioridade, data_hora)  
+        self.listar_tarefas()
+
+        
+        color_mapping = {'Urgente': 'red', 'Alta': '#FFA500', 'Média': 'blue', 'Baixa': 'green'}
+        priority_color = color_mapping.get(prioridade, 'white')
+
+        # Update the text color for the most recently added task button
+        last_index = len(self.tarefas) - 1
+        self.janela[f"botao_tarefa_{last_index + 1}"].update(self.tarefas[last_index], visible=True, button_color=('white', priority_color))
+
+        self.janela["tarefa"].update("")  # Limpar o campo de tarefa
+        self.janela["hora"].update("")  # Limpar o campo de hora
+        self.janela["dia"].update("")   # Limpar o campo de dia
+        self.janela["prioridade"].update("")  # Limpar o campo de prioridade
+
+
+        
+    def listar_tarefas(self):
+        if not self.tarefas:
+            self.janela["output"].update("Nenhuma tarefa encontrada.")
+        else:
+            lista_tarefas = "\n".join(self.tarefas)
+            self.janela["output"].update(f'Lista de Tarefas:\n{lista_tarefas}')
+
+            for i, tarefa in enumerate(self.tarefas[:20]):
+                self.janela[f"botao_tarefa_{i+1}"].update(tarefa, visible=True)
+                self.janela[f"remover_tarefa_{i+1}"].update(visible=True)
+
+    def listar_tarefas_concluidas(self):
+        tarefas_concluidas = [tarefa for tarefa in self.tarefas if tarefa.startswith('Concluído')]
+        if not tarefas_concluidas:
+            sg.popup("Nenhuma tarefa concluída encontrada.")
+        else:
+            lista_tarefas_concluidas = "\n".join(tarefas_concluidas)
+            sg.popup_scrolled(f'Lista de Tarefas Concluídas:\n{lista_tarefas_concluidas}')
+
+    def remover_tarefa(self, numero):
+        if 1 <= numero <= len(self.tarefas):
+            tarefa_removida = self.tarefas.pop(numero - 1)
+            sg.popup(f'Tarefa "{tarefa_removida}" removida.')
+            self.listar_tarefas()
+            self.atualizar_layout()
+        else:
+            sg.popup("Número de tarefa inválido.")
+
+    def concluir_tarefa(self, numero):
+        if 1 <= numero <= len(self.tarefas):
+            tarefa = self.tarefas.pop(numero - 1)
+            tarefa_concluida = f'Concluído - {tarefa}'
+            sg.popup(f'Tarefa "{tarefa}" concluída.')
+            self.tarefas.append(tarefa_concluida)
+            self.listar_tarefas()
+            self.atualizar_layout()
+        else:
+            sg.popup("Número de tarefa inválido.")
+
+    def atualizar_layout(self):
+        # Update the layout to reflect the current state of tasks
+        new_layout = [
+            [sg.Text("Adicionar Tarefa:")],
+            [sg.Text("Nome:"), sg.InputText(key="tarefa")],
+            [sg.Text("Hora:"), sg.InputText(key="hora", size=(10, 1))],
+            [sg.Text("Data:"), sg.Input(key="dia", size=(10, 1)), sg.CalendarButton("Calendário", target="dia", format='%Y-%m-%d')],
+            [sg.Text("Prioridade:"), sg.Combo(['Baixa', 'Média', 'Alta', 'Urgente'], key="prioridade")],  # Add ComboBox for priority
+            [sg.Button("Adicionar Tarefa", key="adicionar_tarefa")],
+            [sg.Button("Listar Tarefas Concluídas", key="listar_tarefas_concluidas")],
+            [sg.Text("", size=(50, 1), key="output")],
+            *[[sg.Button(f"Tarefa {i+1}", key=f"botao_tarefa_{i+1}", visible=False),
+               sg.Button("X", key=f"remover_tarefa_{i+1}", visible=False, button_color=("white", sg.theme_background_color()))] for i in range(20)]
+        ]
+        self.janela.Layout(new_layout)
+        
+    def remover_tarefa(self, numero):
+        if 1 <= numero <= len(self.tarefas):
+            tarefa_removida = self.tarefas.pop(numero - 1)
+            sg.popup(f'Tarefa "{tarefa_removida}" removida.')
+            self.listar_tarefas()
+        else:
+            sg.popup("Número de tarefa inválido.")
+
+    def concluir_tarefa(self, numero):
+        if 1 <= numero <= len(self.tarefas):
+            tarefa = self.tarefas.pop(numero - 1)
+            tarefa_concluida = f'Concluído - {tarefa}'
+            sg.popup(f'Tarefa "{tarefa}" concluída.')
+            self.tarefas.append(tarefa_concluida)
+            self.listar_tarefas()
+        else:
+            sg.popup("Número de tarefa inválido.")
+
+    # Add the following method for removing a task from the GUI
+    def remover_tarefa_gui(self, numero):
+        if 1 <= numero <= len(self.tarefas):
+            tarefa_removida = self.tarefas.pop(numero - 1)
+            sg.popup(f'Tarefa "{tarefa_removida}" removida.')
+            self.listar_tarefas()
+            self.janela[f"botao_tarefa_{numero}"].update(visible=False)
+            self.janela[f"remover_tarefa_{numero}"].update(visible=False)
+        else:
+            sg.popup("Número de tarefa inválido.")
+
+    def executar(self):
+        while True:
+            evento, valores = self.janela.read()
+
+            if evento == sg.WINDOW_CLOSED:
+                break
+            elif evento == "adicionar_tarefa":
+                tarefa = valores["tarefa"]
+                hora = valores["hora"]
+                dia = valores["dia"]
+                if tarefa:
+                    self.adicionar_tarefa(tarefa, hora, dia)
+            elif evento == "listar_tarefas_concluidas":
+                self.listar_tarefas_concluidas()
+            elif evento.startswith("botao_tarefa_"):
+                numero_tarefa = int(evento.split("_")[-1])
+                self.concluir_tarefa(numero_tarefa)
+            elif evento.startswith("remover_tarefa_"):
+                numero_tarefa = int(evento.split("_")[-1])
+                self.remover_tarefa_gui(numero_tarefa)  # Use the new method to remove from GUI
+
+        self.janela.close()
+            
+            
+            
+# Initialize Google Sheets
+google_sheets_app = GoogleSheetsApp()
+
+# Initialize the GUI
+gerenciador = GerenciadorTarefasGUI(google_sheets_app)
+
+# Start the event loop
+gerenciador.executar()
